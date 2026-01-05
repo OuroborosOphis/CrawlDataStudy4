@@ -149,26 +149,23 @@
       } else {
         console.log("✅ Có vẻ đã đăng nhập thành công bằng cookies.");
       }
-    
-      // click vào làm full test
-      // await page.waitForSelector('a[href="#nav-taketest"]', { visible: true });
-      // await page.click('a[href="#nav-taketest"]');
-      // console.log("✅ Đã click 'Làm full test'");
-    
-      // // --- 4️⃣ Chờ nút "BẮT ĐẦU THI" xuất hiện rồi click ---
-      // await page.waitForSelector(`a[href="${new URL(START_URL).pathname}"]`, { visible: true });
-      // await page.click(`a[href="${new URL(START_URL).pathname}"]`);
-      // console.log("✅ Đã click 'BẮT ĐẦU THI'");
-    
-      // // --- 6️⃣ Chờ các câu hỏi xuất hiện ---
-      // await page.waitForSelector(".test-question, .question", { timeout: 20000 });
-      // console.log("✅ Đã load đề thi");
+
       // Go to the base domain first so page.setCookie can work (domain matching)
       await page.goto("https://study4.com/tests/224/practice/?part=729&part=730&part=731&part=732&part=733&part=734&part=735", { waitUntil: "networkidle2" });
     
       // 5️⃣ Đảm bảo tất cả part đã load
       await page.waitForSelector(".tab-pane", { timeout: 20000 });
-    
+
+      // Bắt console.log từ browser context
+      page.on('console', msg => {
+        console.log('PAGE LOG:', msg.text());
+      });
+      page.on('pageerror', err => {
+        console.log('PAGE ERROR:', err);
+      });
+
+      console.log("✓ .text-success elements loaded");
+   
       // 6️⃣ Crawl toàn bộ 7 part
       const result = await page.evaluate(() => {
         const parts = document.querySelectorAll(".tab-pane");
@@ -189,14 +186,63 @@
             `Part ${partIdx + 1}`;
     
           const groupWrappers = part.querySelectorAll(".question-group-wrapper");
+
+          const getAudioSrc = (root) =>
+            root.querySelector(".context-audio audio source")?.src ||
+            root.querySelector(".context-audio audio")?.src ||
+            root.querySelector(".context-audio source")?.src ||
+            null;
+
+          const getTranscriptFromRoot = (root) => {
+            console.log("=== TRANSCRIPT DEBUG ===");
+            console.log("Root element:", root.className);
+            
+            const contextTranscript = root.querySelector(".context-transcript");
+            console.log("Found .context-transcript:", !!contextTranscript);
+            
+            const collapse = root.querySelector(".context-transcript .collapse");
+            console.log("Found .collapse inside .context-transcript:", !!collapse);
+            
+            if (collapse) {
+              console.log("Collapse textContent:", collapse.textContent.substring(0, 100));
+            }
+            
+            return collapse ? collapse.textContent.replace(/\s+/g, " ").trim() : null;
+          };
+
+          const getCorrectAnswer = (itemWrapper) => {
+            // .text-success nằm trong .question-wrapper > .question-content
+            const successEl = itemWrapper.querySelector(".question-wrapper .question-content .text-success");
+            
+            if (!successEl) {
+              console.log("NOT FOUND: .text-success");
+              return null;
+            }
+            
+            const txt = successEl.textContent || "";
+            console.log("Found .text-success:", txt);
+            
+            const match = txt.match(/Đáp án đúng:?\s*([A-D])/i);
+            return match ? match[1].toUpperCase() : null;
+          };
+
+          function getExplanation(questionEl) {
+            // questionEl là .question-item-wrapper
+            const explainWrapper = questionEl.querySelector('.question-explanation-wrapper');
+            const explainEl = explainWrapper?.querySelector('.collapse');
+            
+            return explainEl ? explainEl.textContent.replace(/\s+/g, " ").trim() : null;
+          }
     
           // Nếu có nhóm (Part 3–4–6–7)
           if (groupWrappers.length > 0) {
             const groups = Array.from(groupWrappers).map((group, groupIndex) => {
+              const groupAudio = getAudioSrc(group);
+              const groupTranscript = getTranscriptFromRoot(group);  // ← Sửa từ getTranscript thành getTranscriptFromRoot
               const passage =
                 group.querySelector(".context-content")?.innerText?.trim() || null;
               const image = group.querySelector("img")?.src || null;
-    
+
               const questions = Array.from(
                 group.querySelectorAll(".question-item-wrapper")
               ).map((q, i) => {
@@ -204,31 +250,34 @@
                   q.querySelector(".question-number strong")?.innerText?.trim() ||
                   String(i + 1);
                 const questionText =
-                  q.querySelector(".question-text, .qtext")?.innerText?.trim() ||
-                  "";
-    
-                const answers = Array.from(q.querySelectorAll(".form-check")).map(
-                  (a) => ({
-                    option: a.querySelector("input")?.value || "",
-                    text:
-                      a
-                        .querySelector("label")
-                        ?.innerText?.replace(/^[A-D]\.\s*/, "")
-                        ?.trim() || "",
-                  })
-                );
-    
-                return { number, questionText, answers };
+                  q.querySelector(".question-text, .qtext")?.innerText?.trim() || "";
+
+                const answers = Array.from(q.querySelectorAll(".form-check")).map((a) => ({
+                  option: a.querySelector("input")?.value || "",
+                  text:
+                    a.querySelector("label")?.innerText?.replace(/^[A-D]\.\s*/, "")?.trim() ||
+                    "",
+                }));
+
+                return {
+                  number,
+                  questionText,
+                  answers,
+                  correctAnswer: getCorrectAnswer(q),
+                  explanation: getExplanation(q),
+                };
               });
-    
+
               return {
                 group: groupIndex + 1,
+                groupAudio,
+                groupTranscript,
                 passage,
                 image,
                 questions,
               };
             });
-    
+
             allParts.push({
               partId,
               partName,
@@ -237,29 +286,36 @@
             });
           } else {
             // Part 1–2 hoặc Part 5
-            const questions = Array.from(
-              part.querySelectorAll(".question-item-wrapper")
-            ).map((q, idx) => {
-              const number =
-                q.querySelector(".question-number strong")?.innerText?.trim() ||
-                String(idx + 1);
-              const questionText =
-                q.querySelector(".question-text, .qtext")?.innerText?.trim() || "";
-              const image = q.querySelector("img")?.src || null;
-    
-              const answers = Array.from(q.querySelectorAll(".form-check")).map(
-                (a) => ({
+            const questions = Array.from(part.querySelectorAll(".question-item-wrapper")).map(
+              (q, idx) => {
+                const number =
+                  q.querySelector(".question-number strong")?.innerText?.trim() ||
+                  String(idx + 1);
+                const questionText =
+                  q.querySelector(".question-text, .qtext")?.innerText?.trim() || "";
+                const image = q.querySelector("img")?.src || null;
+                const questionAudio = getAudioSrc(q);  // Lấy từ context-audio trong q
+                const transcript = getTranscriptFromRoot(q);  // Lấy từ context-transcript trong q
+
+                const answers = Array.from(q.querySelectorAll(".form-check")).map((a) => ({
                   option: a.querySelector("input")?.value || "",
                   text:
-                    a
-                      .querySelector("label")
-                      ?.innerText?.replace(/^[A-D]\.\s*/, "")
-                      ?.trim() || "",
-                })
-              );
-    
-              return { number, questionText, image, answers };
-            });
+                    a.querySelector("label")?.innerText?.replace(/^[A-D]\.\s*/, "")?.trim() ||
+                    "",
+                }));
+
+                return {
+                  number,
+                  questionText,
+                  image,
+                  questionAudio,
+                  transcript,
+                  answers,
+                  correctAnswer: getCorrectAnswer(q),  // Tìm .text-success trong .question-wrapper của q
+                  explanation: getExplanation(q),       // Tìm .collapse trong .question-explanation-wrapper của q
+                };
+              }
+            );
     
             allParts.push({
               partId,
@@ -275,12 +331,12 @@
     
       // 7️⃣ Lưu kết quả ra file
       fs.writeFileSync(
-        "toeic_full_part.json",
+        "toeic_full_part_and_result.json",
         JSON.stringify(result, null, 2),
         "utf-8"
       );
       console.log(
-        `✅ Crawl xong ${result.parts.length} part, đã lưu -> toeic_full_part.json`
+        `✅ Crawl xong ${result.parts.length} part, đã lưu -> toeic_full_part_and_result.json`
       );
     
       // giữ browser mở để bạn kiểm tra; nếu muốn đóng tự động, uncomment:
