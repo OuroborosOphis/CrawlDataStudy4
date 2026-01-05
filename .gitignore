@@ -17,6 +17,7 @@ cookies_from_puppeteer.json
 
 # Data files - kết quả crawl
 toeic_full_test.json
+toeic_full_part.json
 data.json
 
 # Notes - có thể chứa thông tin đăng nhập
