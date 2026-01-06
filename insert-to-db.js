@@ -9,6 +9,25 @@ const dbConfig = {
   database: 'doantotnghiep3', // 👈 Sửa tên database
 };
 
+// Hàm helper
+function getQuestionType(partNumber) {
+  const types = {
+    1: 'PHOTO_DESCRIPTION',
+    2: 'QUESTION_RESPONSE',
+    3: 'SHORT_CONVERSATION',
+    4: 'SHORT_TALK',
+    5: 'INCOMPLETE_SENTENCE',
+    6: 'TEXT_COMPLETION',
+    7: 'READING_COMPREHENSION',
+  };
+  return types[partNumber] || 'UNKNOWN';
+}
+
+function randomDifficulty() {
+  const difficulties = ['EASY', 'MEDIUM', 'HARD'];
+  return difficulties[Math.floor(Math.random() * difficulties.length)];
+}
+
 async function insertToDatabase() {
   // 1. Đọc file JSON
   const data = JSON.parse(fs.readFileSync('./toeic_full_part_and_result.json', 'utf8'));
@@ -73,11 +92,13 @@ async function insertToDatabase() {
         for (const group of part.groups) {
           // Insert MediaQuestion (chứa audio/image/passage chung của group)
           const skill = partNumber <= 4 ? 'LISTENING' : 'READING';
-          const section = `Part ${partNumber}`;
+          const type = getQuestionType(partNumber);
+          const difficulty = randomDifficulty();
+          const groupTitle = `Part ${partNumber}: Q${group.questions[0]?.number}-Q${group.questions[group.questions.length - 1]?.number}`;
           
           const [mediaResult] = await connection.execute(
-            'INSERT INTO mediaquestion (Skill, Type, Section, AudioUrl, ImageUrl, Scirpt) VALUES (?, ?, ?, ?, ?, ?)',
-            [skill, section, section, group.groupAudio, group.image, group.groupTranscript || group.passage]
+            'INSERT INTO mediaquestion (Skill, Type, Section, AudioUrl, ImageUrl, Scirpt, GroupTitle, Difficulty) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [skill, type, partNumber, group.groupAudio, group.image, group.groupTranscript || group.passage, groupTitle, difficulty]
           );
           const mediaQuestionId = mediaResult.insertId;
           
@@ -110,22 +131,22 @@ async function insertQuestion(connection, examId, partNumber, q, order, options 
   
   if (!mediaQuestionId && (audio || image || transcript)) {
     const skill = partNumber <= 4 ? 'LISTENING' : 'READING';
-    const section = `Part ${partNumber}`;
+    const type = getQuestionType(partNumber);
+    const difficulty = randomDifficulty();
     
     const [mediaResult] = await connection.execute(
-      'INSERT INTO mediaquestion (Skill, Type, Section, AudioUrl, ImageUrl, Scirpt) VALUES (?, ?, ?, ?, ?, ?)',
-      [skill, section, section, audio, image, transcript]
+      'INSERT INTO mediaquestion (Skill, Type, Section, AudioUrl, ImageUrl, Scirpt, Difficulty) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [skill, type, partNumber, audio, image, transcript, difficulty]
     );
     finalMediaQuestionId = mediaResult.insertId;
   }
   
-  // Insert Question
+  // Insert Question (không cần ExamID vì đã có trong exam_question)
   const [questionResult] = await connection.execute(
     `INSERT INTO question 
-     (ExamID, MediaQuestionID, QuestionText, \`Explain\`, OrderInGroup) 
-     VALUES (?, ?, ?, ?, ?)`,
+     (MediaQuestionID, QuestionText, \`Explain\`, OrderInGroup) 
+     VALUES (?, ?, ?, ?)`,
     [
-      examId,
       finalMediaQuestionId || null,
       q.questionText || '',
       q.explanation || null,
